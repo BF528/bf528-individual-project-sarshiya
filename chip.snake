@@ -1,0 +1,89 @@
+import pandas
+
+sample_csv = pandas.read_csv('sample_sheet.csv', index_col='name')
+CONDITIONS = set(sample_csv['condition'].tolist())
+REPS = set(sample_csv['replicate'].tolist())
+
+rule all:
+    input:
+        expand('results/{condition}_{rep}_fastqc.html', condition=CONDITIONS, rep=REPS),
+        expand('results/{condition}_{rep}.trimmed.fastq.gz', condition=CONDITIONS, rep=REPS),
+        'results/m39_primary_assembly.fa.gz',
+        #'results/m39_gene_annotation.gtf',
+        expand('results/genome_index.{ext}', ext=['1.bt2', '2.bt2', '3.bt2', '4.bt2', 'rev.1.bt2', 'rev.2.bt2'])
+		
+rule get_m39:
+	output:
+		'results/m39_primary_assembly.fa.gz'
+	params:
+		url = 'https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_mouse/release_M34/GRCm39.primary_assembly.genome.fa.gz'
+	shell:
+		'''
+		wget -P {output} {params.url}
+		'''
+
+rule get_m39_gtf:
+	output:
+		'results/m39_gene_annotation.gtf.gz'
+	params:
+		url = 'https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_mouse/release_M34/gencode.vM34.primary_assembly.annotation.gtf.gz'	
+
+	shell:
+		'''
+		wget -P {output} {params.url}
+		'''
+
+#rule to decompress the gtf file
+rule decompress_gtf:
+	input : 
+		gz =  'results/m39_gene_annotation.gtf.gz'
+	output : 
+		gtf = 'results/m39_gene_annotation.gtf'
+	shell:
+		'''
+		gunzip -c {input.gz} > {output.gtf}
+		'''
+
+rule bowtie2_build_gencode:
+    input:
+        'results/m39_primary_assembly.fa.gz/GRCm39.primary_assembly.genome.fa.gz'
+    output:
+        expand('results/genome_index.{ext}', ext=['1.bt2', '2.bt2', '3.bt2', '4.bt2', 'rev.1.bt2', 'rev.2.bt2'])
+    threads: 16
+    conda:
+        'envs/bowtie2_env.yml'
+    shell:
+        """
+        bowtie2-build --threads {threads} {input} results/genome_index &&
+        touch {output}
+        """
+
+rule fastqc:
+    input:
+        'samples/{condition}_{rep}.fastq.gz'
+    output:
+        html='results/{condition}_{rep}_fastqc.html',
+        zip='results/{condition}_{rep}_fastqc.zip'
+    params:
+        outdir='results/'
+    conda:
+        'envs/fastqc_env.yml'
+    shell:
+        """
+        fastqc {input} -o {params.outdir}
+        """
+
+rule trimmomatic:
+	input:
+		"samples/{condition}_{rep}.fastq.gz"
+	output:
+		"results/{condition}_{rep}.trimmed.fastq.gz"
+	params :
+		adapters="results/TruSeq3-SE.fa"
+	conda:
+		'envs/trimmomatic_env.yml'
+	shell:
+		"""
+		trimmomatic SE -threads {threads} {input} {output} ILLUMINACLIP:{params.adapters}:2:30:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15
+		"""
+
