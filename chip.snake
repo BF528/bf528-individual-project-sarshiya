@@ -9,9 +9,20 @@ rule all:
         expand('results/{condition}_{rep}_fastqc.html', condition=CONDITIONS, rep=REPS),
         expand('results/{condition}_{rep}.trimmed.fastq.gz', condition=CONDITIONS, rep=REPS),
         'results/m39_primary_assembly.fa.gz',
-        #'results/m39_gene_annotation.gtf',
-        expand('results/genome_index.{ext}', ext=['1.bt2', '2.bt2', '3.bt2', '4.bt2', 'rev.1.bt2', 'rev.2.bt2'])
-		
+        'results/m39_gene_annotation.gtf.gz',
+        'results/m39_gene_annotation.gtf',
+        expand('results/genome_index.{ext}', ext=['1.bt2', '2.bt2', '3.bt2', '4.bt2', 'rev.1.bt2', 'rev.2.bt2']),
+        expand('results/{condition}_{rep}.flagstat.txt',condition=CONDITIONS, rep=REPS),
+        "results/multiqc_report.html",
+        expand("results/{condition}_{rep}.bw",condition=CONDITIONS, rep=REPS),
+        "results/multiBigWigSummary_results.npz",
+        "results/plotCorrelation_heatmap.png",
+        "results/plotFingerprint.png",
+        expand("results/peaks_IP_{rep}.txt", rep=REPS),
+        "results/motif_analysis",
+        "results/annotated_peaks.txt"
+         
+        		
 rule get_m39:
 	output:
 		'results/m39_primary_assembly.fa.gz'
@@ -33,10 +44,9 @@ rule get_m39_gtf:
 		wget -P {output} {params.url}
 		'''
 
-#rule to decompress the gtf file
 rule decompress_gtf:
 	input : 
-		gz =  'results/m39_gene_annotation.gtf.gz'
+		gz = 'results/m39_gene_annotation.gtf.gz/gencode.vM34.primary_assembly.annotation.gtf.gz'
 	output : 
 		gtf = 'results/m39_gene_annotation.gtf'
 	shell:
@@ -87,3 +97,220 @@ rule trimmomatic:
 		trimmomatic SE -threads {threads} {input} {output} ILLUMINACLIP:{params.adapters}:2:30:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15
 		"""
 
+rule bowtie2_align:
+    input:
+        index="results/genome_index.1.bt2",
+        trimmed_fastq="results/{condition}_{rep}.trimmed.fastq.gz"
+    output:
+        bam="results/{condition}_{rep}.bam"
+    threads: 16
+    params:
+        dir = "results/genome_index"
+    conda:
+        'envs/bowtie2_env.yml'
+    shell:
+        """
+        bowtie2 -x {params.dir} -U {input.trimmed_fastq} | samtools view -bS - > {output.bam}
+        """
+
+rule samtools_sort:
+	input:
+		bam="results/{condition}_{rep}.bam"
+	output:
+		sorted_bam="results/{condition}_{rep}.sorted.bam"
+	conda:
+		'envs/samtools_env.yml'
+	shell:
+		"""
+		samtools sort -o {output.sorted_bam} {input.bam}
+		"""
+
+rule samtools_idx:
+	input:
+		sorted_bam="results/{condition}_{rep}.sorted.bam"
+	output:
+		bam_index="results/{condition}_{rep}.sorted.bam.bai"
+	conda:
+		'envs/samtools_env.yml'
+	shell:
+		"""
+		samtools index {input.sorted_bam}
+		"""
+rule flagstats:
+	input:
+		bam="results/{condition}_{rep}.sorted.bam"
+	output:
+		flagstat="results/{condition}_{rep}.flagstat.txt"
+	conda:
+		'envs/samtools_env.yml'
+	shell:
+		"""
+		samtools flagstat {input.bam} > {output.flagstat}
+		"""
+
+rule multiqc:
+	input:
+		multiqc = expand("results/{condition}_{rep}.flagstat.txt", condition=CONDITIONS, rep=REPS)
+	output:
+		html="results/multiqc_report.html"
+	conda:
+		'envs/multiqc_env.yml'
+	shell:
+		"""
+		 multiqc -o results/ {input.multiqc}
+		"""
+
+rule bamCoverage:
+    input:
+        bam="results/{condition}_{rep}.sorted.bam",
+        bai="results/{condition}_{rep}.sorted.bam.bai"
+    output:
+        bigwig="results/{condition}_{rep}.bw"
+    threads: 4
+    conda:
+        'envs/deeptools_env.yml'
+    shell:
+        """
+        bamCoverage -b {input.bam} -o {output.bigwig} -p {threads}
+        """
+
+
+rule multiBwSummary:
+	input:
+		bw_files=expand("results/{condition}_{rep}.bw", condition=CONDITIONS, rep=REPS)
+	output:
+		summary="results/multiBigWigSummary_results.npz"
+	conda:
+		'envs/deeptools_env.yml'
+	shell:
+		"""
+		multiBigwigSummary bins -b {input.bw_files} -o {output.summary}
+		"""
+
+rule plotCorrelation:
+	input:
+		summary="results/multiBigWigSummary_results.npz"
+	output:
+		plot="results/plotCorrelation_heatmap.png"
+	conda:
+		'envs/deeptools_env.yml'
+	shell:
+		"""
+		plotCorrelation -in {input.summary} -c pearson -p heatmap -o {output.plot}
+		"""
+
+rule plotFingerprint:
+    input:
+        bam_files=expand("results/{condition}_{rep}.sorted.bam", condition=CONDITIONS, rep=REPS)
+    output:
+        plot="results/plotFingerprint.png"
+    conda:
+        'envs/deeptools_env.yml'
+    shell:
+        """
+        plotFingerprint -b {input.bam_files} \
+        --labels {input.bam_files} \
+        --minMappingQuality 30 --skipZeros \
+        --numberOfSamples 50000 \
+        -T "Fingerprints of different samples" \
+        --plotFile {output.plot}
+        """
+
+rule make_tag_dir:
+	input:
+		bam = "results/{condition}_{rep}.sorted.bam"
+	output:
+		directory("results/{condition}_{rep}_tagDir")
+	conda:
+		'envs/homer_env.yml'
+	shell:
+		"""
+		makeTagDirectory {output} {input.bam}
+		"""
+
+rule findPeaks:
+    input:
+        IP = 'results/IP_{rep}_tagDir/',
+        CTL ='results/CTL_{rep}_tagDir/'
+    output:
+        peaks = "results/peaks_IP_{rep}.txt"
+    conda:
+        'envs/homer_env.yml'
+    shell:
+        """
+        findPeaks {input.IP} -i {input.CTL} -style factor -o {output.peaks}
+        """
+
+rule convertPeakFiles_IP:
+    input:
+        txt = "results/peaks_IP_{rep}.txt"
+    output:
+        bed = "results/peaks_IP_{rep}.bed"
+    conda:
+        'envs/homer_env.yml'
+    shell:
+        """
+        pos2bed.pl {input.txt} > {output.bed}
+        """
+
+rule intersect_peaks_IP:
+    input:
+        peaks1 = "results/peaks_IP_rep1.bed",
+        peaks2 = "results/peaks_IP_rep2.bed"
+    output:
+        bed = "results/reproducible_peaks.bed"
+    conda:
+        'envs/bedtools_env.yml'
+    shell:
+        """
+        bedtools intersect -a {input.peaks1} -b {input.peaks2} > {output.bed}
+        """
+
+rule filter_blacklist_IP:
+    input:
+        peaks = "results/reproducible_peaks.bed",
+        blacklist = "results/mm10-blacklist.v2.bed"
+    output:
+        bed = "results/filtered_reproducible_peaks.bed"
+    conda:
+        'envs/bedtools_env.yml'
+    shell:
+        """
+        bedtools intersect -a {input.peaks} -b {input.blacklist} -v > {output.bed}
+        """
+
+rule annotate_peaks_IP:
+    input:
+        peaks = "results/filtered_reproducible_peaks.bed",
+        gtf = "results/m39_gene_annotation.gtf"
+    output:
+        "results/annotated_peaks.txt"
+    conda:
+        'envs/homer_env.yml'
+    shell:
+        """
+        annotatePeaks.pl {input.peaks} mm10 -gtf {input.gtf} > {output}
+        """
+
+rule unzip_genome:
+    input:
+        "results/m39_primary_assembly.fa.gz/GRCm39.primary_assembly.genome.fa.gz"
+    output:
+        "results/unzipped_GRCm39.primary_assembly.genome.fa"
+    shell:
+        """
+        gunzip -c {input} > {output}
+        """
+
+rule motifs_IP:
+    input:
+        peaks = "results/filtered_reproducible_peaks.bed",
+        genome = "results/unzipped_GRCm39.primary_assembly.genome.fa"
+    output:
+        directory("results/motif_analysis")
+    conda:
+        'envs/homer_env.yml'
+    shell:
+        """
+        findMotifsGenome.pl {input.peaks} {input.genome} {output} -size 200
+        """
