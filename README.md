@@ -3,7 +3,7 @@
 
 ### Methods
 
-ChIP-seq datasets of Mus musculus consisting of paired experiments were obtained. Initial quality control was performed using FastQC v0.12.1-0 to assess the quality of raw sequencing reads. Adapter trimming and quality filtering were conducted using Trimmomatic v0.39. Reads were aligned to the Mus musculus reference genome (GRCm39) using Bowtie2 v2.5.3. The reference genome sequence used was `GRCm39.primary_assembly.genome.fa.gz`. 
+ChIP-seq datasets of Mus musculus consisting of single end experiments were obtained. Initial quality control was performed using FastQC v0.12.1-0 to assess the quality of raw sequencing reads. Adapter trimming and quality filtering were conducted using Trimmomatic v0.39. Reads were aligned to the Mus musculus reference genome (GRCm39) using Bowtie2 v2.5.3. The reference genome sequence used was `GRCm39.primary_assembly.genome.fa.gz`. 
 
 Alignment statistics, including mapping rates and unique mapping rates, were calculated using SAMtools v1.19.2, with quality assessment performed using flagstat. MultiQC v1.20 aggregated QC metrics from multiple samples into a single report. 
 
